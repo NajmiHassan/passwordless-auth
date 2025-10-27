@@ -1,41 +1,49 @@
 // CORE NODE.JS MODULES
-import crypto from 'crypto'; // For generating secure random tokens
+import crypto from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 // THIRD-PARTY LIBRARIES
-import express from 'express'; // Web framework for building APIs
-import jwt from 'jsonwebtoken'; // For creating and verifying JWT tokens
-import nodemailer from 'nodemailer'; // For sending emails
-import cookieParser from 'cookie-parser'; // For parsing cookies
-import cors from 'cors'; // For handling Cross-Origin Resource Sharing
+import express from 'express';
+import jwt from 'jsonwebtoken';
+import nodemailer from 'nodemailer';
+import cookieParser from 'cookie-parser';
+import cors from 'cors';
 
 // DATABASE & CONFIGURATION
-import { PrismaClient } from '@prisma/client'; // Database ORM client
-import dotenv from 'dotenv'; // For loading environment variables
+import { PrismaClient } from '@prisma/client';
+import dotenv from 'dotenv';
 
-// Load environment variables from .env file
 dotenv.config();
 
-// DATABASE INITIALIZATION
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const prisma = new PrismaClient();
 const app = express();
 
 // Middleware
 app.use(express.json());
 app.use(cookieParser());
-
 app.use(
-	cors({
-		origin: process.env.FRONTEND_BASE_URL,
-		credentials: true,
-	})
+  cors({
+    origin: [
+      process.env.FRONTEND_BASE_URL,
+      'http://127.0.0.1:5500'
+    ],
+    credentials: true,
+  })
 );
+
+// Serve static files from 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
 // EMAIL FUNCTION
 // ==========================================
 
 const sendMagicLinkEmail = async (email, name, magicLinkUrl) => {
-	// EMAIL CONFIGURATION
 	const transporter = nodemailer.createTransport({
 		service: 'gmail',
 		host: 'smtp.gmail.com',
@@ -77,7 +85,6 @@ app.post('/api/auth/signup', async (req, res) => {
 	try {
 		const { email, name } = req.body;
 
-		// Validate input
 		if (!email || !email.includes('@')) {
 			return res.status(400).json({
 				success: false,
@@ -85,7 +92,6 @@ app.post('/api/auth/signup', async (req, res) => {
 			});
 		}
 
-		// Check if user exists
 		let user = await prisma.user.findUnique({
 			where: { email },
 		});
@@ -97,12 +103,10 @@ app.post('/api/auth/signup', async (req, res) => {
 			});
 		}
 
-		// Generate magic link token
 		const token = crypto.randomBytes(32).toString('hex');
-		const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+		const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
 		if (user) {
-			// Update existing unverified user
 			user = await prisma.user.update({
 				where: { email },
 				data: {
@@ -113,7 +117,6 @@ app.post('/api/auth/signup', async (req, res) => {
 				},
 			});
 		} else {
-			// Create new user
 			user = await prisma.user.create({
 				data: {
 					email,
@@ -125,8 +128,8 @@ app.post('/api/auth/signup', async (req, res) => {
 			});
 		}
 
-		// Send magic link email
-		const magicLinkUrl = `${process.env.FRONTEND_BASE_URL}/verify?token=${token}`;
+		// Updated magic link URL to use same port as Express server
+		const magicLinkUrl = `http://localhost:${process.env.PORT}/?token=${token}`;
 		await sendMagicLinkEmail(email, name, magicLinkUrl);
 
 		res.json({
@@ -154,7 +157,6 @@ app.post('/api/auth/login', async (req, res) => {
 	try {
 		const { email } = req.body;
 
-		// Validate input
 		if (!email || !email.includes('@')) {
 			return res.status(400).json({
 				success: false,
@@ -173,9 +175,8 @@ app.post('/api/auth/login', async (req, res) => {
 			});
 		}
 
-		// Generate new magic link token
 		const token = crypto.randomBytes(32).toString('hex');
-		const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+		const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
 		await prisma.user.update({
 			where: { email },
@@ -186,8 +187,8 @@ app.post('/api/auth/login', async (req, res) => {
 			},
 		});
 
-		// Send magic link email
-		const magicLinkUrl = `${process.env.FRONTEND_BASE_URL}/verify?token=${token}`;
+		// Updated magic link URL
+		const magicLinkUrl = `http://localhost:${process.env.PORT}/?token=${token}`;
 		await sendMagicLinkEmail(email, user.name, magicLinkUrl);
 
 		res.json({
@@ -222,7 +223,6 @@ app.get('/api/auth/verify', async (req, res) => {
 			});
 		}
 
-		// Find user with valid token
 		const user = await prisma.user.findFirst({
 			where: {
 				magicLinkToken: token,
@@ -240,7 +240,6 @@ app.get('/api/auth/verify', async (req, res) => {
 			});
 		}
 
-		// Mark user as verified and clear magic link
 		const updatedUser = await prisma.user.update({
 			where: { id: user.id },
 			data: {
@@ -251,7 +250,6 @@ app.get('/api/auth/verify', async (req, res) => {
 			},
 		});
 
-		// Generate JWT token
 		const jwtToken = jwt.sign(
 			{
 				userId: user.id,
@@ -262,15 +260,13 @@ app.get('/api/auth/verify', async (req, res) => {
 			{ expiresIn: '7d' }
 		);
 
-		// Set HTTP-only cookie
 		res.cookie('auth_token', jwtToken, {
 			httpOnly: true,
-			secure: process.env.NODE_ENV === 'production',
-			sameSite: 'strict',
-			maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+			secure: false,
+			sameSite: 'lax',
+			maxAge: 7 * 24 * 60 * 60 * 1000,
 		});
 
-		// Redirect to success page or return JSON
 		res.json({
 			success: true,
 			message: 'Successfully authenticated! Welcome back!',
@@ -300,7 +296,6 @@ app.post('/api/auth/resend-verification', async (req, res) => {
 	try {
 		const { email } = req.body;
 
-		// Validate input
 		if (!email || !email.includes('@')) {
 			return res.status(400).json({
 				success: false,
@@ -326,9 +321,8 @@ app.post('/api/auth/resend-verification', async (req, res) => {
 			});
 		}
 
-		// Generate new magic link token
 		const token = crypto.randomBytes(32).toString('hex');
-		const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+		const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
 		await prisma.user.update({
 			where: { email },
@@ -339,8 +333,7 @@ app.post('/api/auth/resend-verification', async (req, res) => {
 			},
 		});
 
-		// Send magic link email
-		const magicLinkUrl = `${process.env.FRONTEND_BASE_URL}/verify?token=${token}`;
+		const magicLinkUrl = `http://localhost:${process.env.PORT}/?token=${token}`;
 		await sendMagicLinkEmail(email, user.name, magicLinkUrl);
 
 		res.json({
@@ -450,8 +443,16 @@ const cleanupExpiredTokens = async () => {
 	}
 };
 
-// Run cleanup every hour
 setInterval(cleanupExpiredTokens, 60 * 60 * 1000);
+
+// ==========================================
+// CATCH-ALL ROUTE - Serve index.html for all non-API routes
+// ==========================================
+app.get('*', (req, res) => {
+	if (!req.path.startsWith('/api')) {
+		res.sendFile(path.join(__dirname, 'public', 'index.html'));
+	}
+});
 
 // ==========================================
 // SERVER STARTUP
@@ -461,4 +462,6 @@ app.listen(process.env.PORT, () => {
 	console.log(
 		`🚀 Passwordless Auth Server running on port ${process.env.PORT}`
 	);
+	console.log(`📁 Serving static files from: ${path.join(__dirname, 'public')}`);
+	console.log(`🌐 Frontend available at: http://localhost:${process.env.PORT}`);
 });
